@@ -75,8 +75,8 @@ class TrackerSiamFC(Tracker):
             1.0 / self.cfg.epoch_num)
         self.lr_scheduler = ExponentialLR(self.optimizer, gamma)
 
-        # failure correlation threshold value
         self.failure_thr = 4
+        self.sampling_method = "gauss"  # random/gauss
         self.gauss_cov = 1000
         self.redetection_samples = 20
         self.target_visible = None
@@ -113,6 +113,18 @@ class TrackerSiamFC(Tracker):
             if key in cfg:
                 cfg.update({key: val})
         return namedtuple('Config', cfg.keys())(**cfg)
+
+    def random_samples(self, method, img_size):
+        if method == "random":
+            x_positions = np.random.randint(10, img_size[0], self.redetection_samples).astype("float")
+            y_positions = np.random.randint(10, img_size[1], self.redetection_samples).astype("float")
+            return np.array([[x, y] for x, y in zip(x_positions, y_positions)])
+        elif method == "gauss":
+            return np.random.multivariate_normal(self.center,
+                                                 np.array([[self.gauss_cov, 0], [0, self.gauss_cov]]),
+                                                 self.redetection_samples)
+        else:
+            raise NotImplementedError
 
     @torch.no_grad()
     def init(self, img, box):
@@ -160,6 +172,8 @@ class TrackerSiamFC(Tracker):
     def update(self, img):
         # set to evaluation mode
         self.net.eval()
+
+        # for debugging
         prev_visible = False if self.target_visible is None else self.target_visible
 
         if self.target_visible is None or self.target_visible:
@@ -169,25 +183,15 @@ class TrackerSiamFC(Tracker):
                 out_size=self.cfg.instance_sz,
                 border_value=self.avg_color) for f in self.scale_factors]
 
-            # for image in x:
-            #     cv2.imshow("k", image)
-            #     cv2.waitKey(0)
-
         else:  # re-detection of the target
             # random positions around precious seen position of target
-            positions = np.random.multivariate_normal(self.center,
-                                                      np.array([[self.gauss_cov, 0], [0, self.gauss_cov]]),
-                                                      self.redetection_samples)
+            positions = self.random_samples(self.sampling_method, (img.shape[0], img.shape[1]))
 
             # search images
             x = [ops.crop_and_resize(
                 img, pos, self.x_sz,
                 out_size=self.cfg.instance_sz,
                 border_value=self.avg_color) for pos in positions]
-
-            # for image in x:
-            #     cv2.imshow("k", image)
-            #     cv2.waitKey(0)
 
         x = np.stack(x, axis=0)
         x = torch.from_numpy(x).to(
@@ -215,8 +219,7 @@ class TrackerSiamFC(Tracker):
 
         response -= response.min()
         response /= response.sum() + 1e-16
-        response = (1 - self.cfg.window_influence) * response + \
-                   self.cfg.window_influence * self.hann_window
+        response = (1 - self.cfg.window_influence) * response + self.cfg.window_influence * self.hann_window
         loc = np.unravel_index(response.argmax(), response.shape)
 
         # locate target center
@@ -245,14 +248,14 @@ class TrackerSiamFC(Tracker):
 
         if prev_visible and not self.target_visible:
             print("Target lost")
-            cv2.imshow("LOST", img)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
+            # cv2.imshow("LOST", img)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
         elif not prev_visible and self.target_visible:
             print("Target found")
-            cv2.imshow("FOUND", img)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
+            # cv2.imshow("FOUND", img)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
 
         # return 1-indexed and left-top based bounding box
         box = np.array([
