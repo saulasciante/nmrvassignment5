@@ -13,6 +13,7 @@ from collections import namedtuple
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
 from got10k.trackers import Tracker
+from statistics import mean
 
 from . import ops
 from .backbones import AlexNetV1
@@ -75,11 +76,15 @@ class TrackerSiamFC(Tracker):
             1.0 / self.cfg.epoch_num)
         self.lr_scheduler = ExponentialLR(self.optimizer, gamma)
 
-        self.failure_thr = 4
-        self.sampling_method = "gauss"  # random/gauss
-        self.gauss_cov = 1000
+        self.failure_thr = None
+        self.redetection_thr = None
+        self.sampling_method = "random"  # random/gauss
+        self.gauss_cov = 5500
         self.redetection_samples = 20
         self.target_visible = None
+        self.frame = 0
+        self.consecutive_failures = 0
+        self.target_corrs = []
 
     def parse_args(self, **kwargs):
         # default parameters
@@ -173,6 +178,9 @@ class TrackerSiamFC(Tracker):
         # set to evaluation mode
         self.net.eval()
 
+        self.frame += 1
+        start_time = time.time()
+
         # for debugging
         prev_visible = False if self.target_visible is None else self.target_visible
 
@@ -186,6 +194,13 @@ class TrackerSiamFC(Tracker):
         else:  # re-detection of the target
             # random positions around precious seen position of target
             positions = self.random_samples(self.sampling_method, (img.shape[0], img.shape[1]))
+            image = None
+
+            # for x, y in positions:
+            #     image = cv2.circle(img, (int(y), int(x)), radius=0, color=(0, 0, 255), thickness=4)
+            # cv2.imshow("SAMPLES - " + self.sampling_method, image)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
 
             # search images
             x = [ops.crop_and_resize(
@@ -216,6 +231,15 @@ class TrackerSiamFC(Tracker):
         # peak location
         response = responses[scale_id]
         max_resp = max(0, response.max())
+        # print(max_resp)
+
+        if not self.failure_thr and not self.redetection_thr:
+            self.failure_thr = 4
+
+        if not self.target_corrs or self.target_visible:
+            self.target_corrs.append(max_resp)
+            self.redetection_thr = mean(self.target_corrs) - 0.2
+            # print(mean(self.target_corrs))
 
         response -= response.min()
         response /= response.sum() + 1e-16
@@ -231,7 +255,8 @@ class TrackerSiamFC(Tracker):
         else:
             disp_in_image = disp_in_instance * self.x_sz / self.cfg.instance_sz
 
-        self.center += disp_in_image
+        if self.target_visible:
+            self.center += disp_in_image
 
         # update target size
         if self.target_visible:
@@ -244,7 +269,22 @@ class TrackerSiamFC(Tracker):
         self.x_sz *= scale
 
         # Target visible if max response higher than threshold
-        self.target_visible = max_resp > self.failure_thr
+        if not self.target_visible and max_resp > self.redetection_thr:
+            self.target_visible = True
+        elif self.target_visible and max_resp < self.failure_thr:
+            self.target_visible = False
+        # self.target_visible = max_resp > self.failure_thr
+
+        # return 1-indexed and left-top based bounding box
+        box = np.array([
+            self.center[1] + 1 - (self.target_sz[1] - 1) / 2,
+            self.center[0] + 1 - (self.target_sz[0] - 1) / 2,
+            self.target_sz[1], self.target_sz[0]])
+
+
+        end_time = time.time()
+        # if self.frame % 200 == 0:
+        #     print("FPS: ", 1 / (end_time - start_time))
 
         if prev_visible and not self.target_visible:
             print("Target lost")
@@ -253,15 +293,13 @@ class TrackerSiamFC(Tracker):
             # cv2.destroyAllWindows()
         elif not prev_visible and self.target_visible:
             print("Target found")
-            # cv2.imshow("FOUND", img)
+            # image2 = cv2.circle(img, (self.center[1], self.center[0]), radius=0, color=(255, 0, 0), thickness=10)
+            # cv2.imshow("FOUND", image2)
             # cv2.waitKey(0)
             # cv2.destroyAllWindows()
 
-        # return 1-indexed and left-top based bounding box
-        box = np.array([
-            self.center[1] + 1 - (self.target_sz[1] - 1) / 2,
-            self.center[0] + 1 - (self.target_sz[0] - 1) / 2,
-            self.target_sz[1], self.target_sz[0]])
+        # if not self.target_visible:
+        #     max_resp = 0
 
         return box, max_resp
 

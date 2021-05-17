@@ -49,6 +49,7 @@ def evaluate_tracker(dataset_path, network_path, results_dir, visualize):
                 br_ = (int(round(prediction[0] + prediction[2])), int(round(prediction[1] + prediction[3])))
                 cv2.rectangle(img, tl_, br_, (0, 0, 255), 1)
 
+                cv2.putText(img, str(score), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
                 cv2.imshow('win', img)
                 key_ = cv2.waitKey(10)
                 if key_ == 27:
