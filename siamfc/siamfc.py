@@ -78,13 +78,13 @@ class TrackerSiamFC(Tracker):
 
         self.failure_thr = None
         self.redetection_thr = None
-        self.sampling_method = "random"  # random/gauss
-        self.gauss_cov = 5500
+        self.sampling_method = "gauss"  # random/gauss
+        self.gauss_cov = 4500
         self.redetection_samples = 20
         self.target_visible = None
         self.frame = 0
-        self.consecutive_failures = 0
         self.target_corrs = []
+        self.target_corr = None
 
     def parse_args(self, **kwargs):
         # default parameters
@@ -233,8 +233,11 @@ class TrackerSiamFC(Tracker):
         max_resp = max(0, response.max())
         # print(max_resp)
 
+        if not self.target_corr:
+            self.target_corr = max_resp
+
         if not self.failure_thr and not self.redetection_thr:
-            self.failure_thr = 4
+            self.failure_thr = 3.5
 
         if not self.target_corrs or self.target_visible:
             self.target_corrs.append(max_resp)
@@ -283,7 +286,7 @@ class TrackerSiamFC(Tracker):
 
 
         end_time = time.time()
-        # if self.frame % 200 == 0:
+        # if self.frame % 50 == 0:
         #     print("FPS: ", 1 / (end_time - start_time))
 
         if prev_visible and not self.target_visible:
@@ -298,8 +301,10 @@ class TrackerSiamFC(Tracker):
             # cv2.waitKey(0)
             # cv2.destroyAllWindows()
 
-        # if not self.target_visible:
-        #     max_resp = 0
+        if not self.target_visible:
+            max_resp = 0
+        else:
+            max_resp = max_resp / self.target_corr
 
         return box, max_resp
 
